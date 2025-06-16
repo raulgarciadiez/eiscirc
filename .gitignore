@@ -9,3 +9,5 @@ venv/
 # IDE
 .vscode/
 .idea/
+
+ *.egg-info/

@@ -1,0 +1,9 @@
+README.md
+setup.py
+eiscirc/__init__.py
+eiscirc/circuit_parser.py
+eiscirc/classes_EIS.py
+eiscirc.egg-info/PKG-INFO
+eiscirc.egg-info/SOURCES.txt
+eiscirc.egg-info/dependency_links.txt
+eiscirc.egg-info/top_level.txt
