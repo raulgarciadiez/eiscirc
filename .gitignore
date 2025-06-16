@@ -10,4 +10,7 @@ venv/
 .vscode/
 .idea/
 
- eiscirc.egg-info/
+*.egg-info/
+*.egg
+build/
+dist/
