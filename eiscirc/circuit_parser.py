@@ -171,6 +171,7 @@ class ImpedanceModel:
     def impedance(self, omega, **params):
         """Compute the impedance of the entire circuit."""
         Z_dict = self._create_impedance_dict(params)
+        print (Z_dict)
         Z_total = self._calculate_impedance(self.circuit_structure, Z_dict, omega)       
         # Extract real and imaginary parts from Z_total
         real_part = np.real(Z_total)
@@ -276,6 +277,23 @@ class ImpedanceModel:
             return f"({operator.join(elements)})"
         else:
             raise ValueError("Unknown structure format")
+        
+    def _convert_list_to_dict(self, param_list, param_names, reference_dict):
+        """
+        Convert a list of parameters back into a dictionary format.
+        Handles cases where parameters are tuples (e.g., CPE elements).
+        """
+        param_dict = {}
+        index = 0
+        for key in param_names:
+            ref_value = reference_dict[key]
+            if isinstance(ref_value, tuple):  # Example: "CPE1": (C_value, alpha)
+                param_dict[key] = tuple(param_list[index:index+len(ref_value)])
+                index += len(ref_value)
+            else:
+                param_dict[key] = param_list[index]
+                index += 1
+        return param_dict
         
 def parse_circuit(expression):
     # Remove all whitespace from the expression
