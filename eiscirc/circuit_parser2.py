@@ -6,7 +6,7 @@ from functools import lru_cache
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from matplotlib.lines import Line2D
-
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 class ImpedanceModel:
     def __init__(self, circuit_structure):
@@ -133,30 +133,55 @@ class ImpedanceModel:
                 param_dict[key] = param_list[index]
                 index += 1
         return param_dict
-    
-    def draw_circuit(self, figsize=(8, 4), dpi=100):
+        
+    def draw_circuit(self, ax=None, position=None, size=(6, 3), scale=1.0, 
+                    loc='upper right', borderpad=1):
         """
-        Draw the circuit diagram using matplotlib.
+        Draw the circuit diagram as matplotlib figure or inset.
         
         Parameters:
-        - figsize: tuple (width, height) in inches
-        - dpi: resolution in dots per inch
+        - ax: matplotlib axis (if None, creates new figure)
+        - position: [width, height] in inches (for inset) or (width, height) in relative units
+        - size: (width, height) in inches (for standalone figure)
+        - scale: scaling factor for all elements
+        - loc: inset location ('upper right', 'lower left', etc.)
+        - borderpad: padding from axes border (for inset)
         
         Returns:
-        - matplotlib Figure object
+        - matplotlib axis containing the circuit diagram
         """
-        fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
-        ax.set_aspect('equal')
-        ax.axis('off')
+        # Set drawing parameters based on context
+        if ax is None:
+            # Standalone figure
+            fig, ax = plt.subplots(figsize=size)
+            ax.set_aspect('equal')
+            ax.axis('off')
+            is_inset = False
+            element_scale = 1.5 * scale
+            fontsize = 10 * scale
+        else:
+            # Inset figure
+            if position is None:
+                position = [0.3, 0.3]  # Relative width/height of parent axes
+            
+            # Create inset axes
+            ax_ins = inset_axes(ax, width=position[0], height=position[1],
+                            loc=loc, borderpad=borderpad)
+            ax_ins.set_aspect('equal')
+            ax_ins.axis('off')
+            is_inset = True
+            element_scale = 0.8 * scale
+            fontsize = 8 * scale
+            ax = ax_ins
         
         # Set drawing parameters
-        element_width = 1.5
-        element_height = 0.8
-        wire_length = 0.5
-        vertical_spacing = 1.5
+        element_width = 1.0 * element_scale
+        element_height = 0.6 * element_scale
+        wire_length = 0.4 * element_scale
+        vertical_spacing = 1.2 * element_scale
         
         # Start drawing from left to right
-        start_x = 1
+        start_x = 0.5 * element_scale
         start_y = 0
         
         # Recursive drawing function
@@ -164,17 +189,23 @@ class ImpedanceModel:
             if isinstance(structure, str):
                 # Draw single component
                 if structure.startswith('R'):
-                    self._draw_resistor(ax, x, y, element_width, element_height, label=structure)
+                    self._draw_resistor(ax, x, y, element_width, element_height, 
+                                      label=structure, fontsize=fontsize)
                 elif structure.startswith('C'):
-                    self._draw_capacitor(ax, x, y, element_width, element_height, label=structure)
+                    self._draw_capacitor(ax, x, y, element_width, element_height, 
+                                       label=structure, fontsize=fontsize)
                 elif structure.startswith('L'):
-                    self._draw_inductor(ax, x, y, element_width, element_height, label=structure)
+                    self._draw_inductor(ax, x, y, element_width, element_height, 
+                                      label=structure, fontsize=fontsize)
                 elif structure.startswith('W'):
-                    self._draw_warburg(ax, x, y, element_width, element_height, label=structure)
+                    self._draw_warburg(ax, x, y, element_width, element_height, 
+                                      label=structure, fontsize=fontsize)
                 elif structure.startswith('CPE'):
-                    self._draw_cpe(ax, x, y, element_width, element_height, label=structure)
+                    self._draw_cpe(ax, x, y, element_width, element_height, 
+                                 label=structure, fontsize=fontsize)
                 else:
-                    self._draw_generic(ax, x, y, element_width, element_height, label=structure)
+                    self._draw_generic(ax, x, y, element_width, element_height, 
+                                     label=structure, fontsize=fontsize)
                 return x + element_width + wire_length
             
             elif isinstance(structure, tuple):
@@ -186,13 +217,12 @@ class ImpedanceModel:
                     return current_x
                 
                 elif operator == 'parallel':
-                    # Calculate how many parallel branches we have
                     num_branches = len(structure) - 1
                     total_height = (num_branches - 1) * vertical_spacing
                     
                     # Draw vertical wires
                     ax.add_line(Line2D([x, x], [y - total_height/2, y + total_height/2], 
-                                    color='black', linewidth=1))
+                               color='black', linewidth=1))
                     
                     # Draw each branch
                     branch_x = []
@@ -201,21 +231,15 @@ class ImpedanceModel:
                         end_x = draw_structure(substructure, x + wire_length, branch_y, level+1)
                         branch_x.append(end_x)
                         
-                        # Draw vertical connection lines
+                        # Draw horizontal connection lines
                         if i > 0:
                             ax.add_line(Line2D([x, x + wire_length], [branch_y, branch_y], 
-                                          color='black', linewidth=1))
+                                             color='black', linewidth=1))
                     
                     # Draw closing vertical wire
                     max_x = max(branch_x)
                     ax.add_line(Line2D([max_x, max_x], 
                                       [y - total_height/2, y + total_height/2], 
-                                      color='black', linewidth=1))
-                    
-                    # Draw horizontal connection lines
-                    for bx in branch_x:
-                        ax.add_line(Line2D([bx, max_x], [y + (i - (num_branches-1)/2) * vertical_spacing, 
-                                      y + (i - (num_branches-1)/2) * vertical_spacing], 
                                       color='black', linewidth=1))
                     
                     return max_x + wire_length
@@ -224,28 +248,32 @@ class ImpedanceModel:
         final_x = draw_structure(self.circuit_structure, start_x, start_y)
         
         # Add input/output wires
-        ax.add_line(Line2D([0, start_x], [start_y, start_y], color='black', linewidth=1))
-        ax.add_line(Line2D([final_x - wire_length, final_x + 1], [start_y, start_y], color='black', linewidth=1))
+        ax.add_line(Line2D([0, start_x], [start_y, start_y], 
+                        color='black', linewidth=1))
+        ax.add_line(Line2D([final_x - wire_length, final_x + 0.5*element_scale], 
+                        [start_y, start_y], color='black', linewidth=1))
         
-        # Set axis limits
-        ax.set_xlim(0, final_x + 1)
-        ax.set_ylim(-3, 3)
+        # Set axis limits with some padding
+        x_padding = 0.5 * element_scale
+        y_padding = 1.0 * element_scale
+        ax.set_xlim(0 - x_padding, final_x + x_padding)
+        ax.set_ylim(-2*element_scale - y_padding, 2*element_scale + y_padding)
         
-        plt.tight_layout()
-        return fig
-    
+        return ax
+        
+
     @staticmethod
-    def _draw_resistor(ax, x, y, width, height, label):
+    def _draw_resistor(ax, x, y, width, height, label, fontsize = 10):
         """Draw a resistor symbol"""
         # Resistor body
         ax.add_patch(patches.Rectangle((x, y - height/2), width, height, 
                                        fill=False, edgecolor='black'))
         # Label
         ax.text(x + width/2, y + height/2 + 0.1, label, 
-                ha='center', va='bottom', fontsize=10)
+                ha='center', va='bottom', fontsize=fontsize)
     
     @staticmethod
-    def _draw_capacitor(ax, x, y, width, height, label):
+    def _draw_capacitor(ax, x, y, width, height, label, fontsize = 10):
         """Draw a capacitor symbol"""
         plate_sep = height * 0.4
         plate_width = width * 0.3
@@ -258,10 +286,10 @@ class ImpedanceModel:
         ax.add_line(Line2D([x, x + width/2 - plate_width/2], [y, y + plate_sep/2], color='black'))
         ax.add_line(Line2D([x + width/2 + plate_width/2, x + width], [y + plate_sep/2, y], color='black'))
         # Label
-        ax.text(x + width/2, y + plate_sep/2 + 0.2, label, ha='center', va='bottom', fontsize=10)
+        ax.text(x + width/2, y + plate_sep/2 + 0.2, label, ha='center', va='bottom', fontsize=fontsize)
     
     @staticmethod
-    def _draw_inductor(ax, x, y, width, height, label):
+    def _draw_inductor(ax, x, y, width, height, label, fontsize = 10):
         """Draw an inductor symbol"""
         coils = 3
         coil_width = width / (coils * 2)
@@ -281,21 +309,21 @@ class ImpedanceModel:
         # End wire
         ax.add_line(Line2D([x + width - coil_width/2, x + width], [y, y], color='black'))
         # Label
-        ax.text(x + width/2, y + coil_height/2 + 0.2, label, ha='center', va='bottom', fontsize=10)
+        ax.text(x + width/2, y + coil_height/2 + 0.2, label, ha='center', va='bottom', fontsize=fontsize)
     
     @staticmethod
-    def _draw_warburg(ax, x, y, width, height, label):
+    def _draw_warburg(ax, x, y, width, height, label, fontsize = 10):
         """Draw a Warburg element symbol"""
         # Similar to resistor but with special marking
         ax.add_patch(patches.Rectangle((x, y - height/2), width, height, 
                                        fill=False, edgecolor='black', linestyle='--'))
         ax.text(x + width/2, y + height/2 + 0.1, label, 
-                ha='center', va='bottom', fontsize=10)
+                ha='center', va='bottom', fontsize=fontsize)
         # Add W symbol inside
-        ax.text(x + width/2, y, 'W', ha='center', va='center', fontsize=8)
+        ax.text(x + width/2, y, 'W', ha='center', va='center', fontsize=fontsize)
     
     @staticmethod
-    def _draw_cpe(ax, x, y, width, height, label):
+    def _draw_cpe(ax, x, y, width, height, label, fontsize = 10):
         """Draw a CPE symbol"""
         # Similar to capacitor but with special marking
         plate_sep = height * 0.4
@@ -309,15 +337,15 @@ class ImpedanceModel:
         ax.add_line(Line2D([x, x + width/2 - plate_width/2], [y, y + plate_sep/2], color='black'))
         ax.add_line(Line2D([x + width/2 + plate_width/2, x + width], [y + plate_sep/2, y], color='black'))
         # Label and Q symbol
-        ax.text(x + width/2, y + plate_sep/2 + 0.2, label, ha='center', va='bottom', fontsize=10)
-        ax.text(x + width/2, y, 'Q', ha='center', va='center', fontsize=8)
+        ax.text(x + width/2, y + plate_sep/2 + 0.2, label, ha='center', va='bottom', fontsize=fontsize)
+        ax.text(x + width/2, y, 'Q', ha='center', va='center', fontsize=fontsize)
     
     @staticmethod
-    def _draw_generic(ax, x, y, width, height, label):
+    def _draw_generic(ax, x, y, width, height, label, fontsize = 10):
         """Draw a generic component symbol"""
         ax.add_patch(patches.Rectangle((x, y - height/2), width, height, 
                                        fill=False, edgecolor='black'))
-        ax.text(x + width/2, y, label, ha='center', va='center', fontsize=10)
+        ax.text(x + width/2, y, label, ha='center', va='center', fontsize=fontsize)
 
 def parse_circuit(expression):
     """Parse a circuit expression string into a structured tuple format."""
