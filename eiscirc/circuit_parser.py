@@ -10,6 +10,19 @@ from matplotlib.lines import Line2D
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 class ImpedanceModel:
+    # Physical defaults for automatic initialization
+    PARAM_DEFAULTS = {
+        'R': 100,        # Resistance (Ω)
+        'C': 1e-6,       # Capacitance (F)
+        'L': 1e-3,       # Inductance (H)
+        'W': 100,        # Warburg coefficient
+        'Ws': {'R': 100, 'tau': 1},      # Finite Warburg
+        'Wo': {'R': 100, 'tau': 1},      # Shorted Warburg
+        'CPE': {'value': 1e-6, 'alpha': 0.8},  # CPE
+        'G': {'R': 100, 'tau': 1},       # Gerischer
+        'H': {'R': 100, 'tau': 1, 'alpha': 0.5}  # Havránek
+    }
+
     def __init__(self, circuit_structure):
         """
         Initialize with either a circuit structure tuple (from parse_circuit) or a string expression.
@@ -21,8 +34,6 @@ class ImpedanceModel:
             self.circuit_string = self._structure_to_string(circuit_structure)
             self.circuit_structure = circuit_structure
 
-        
-
         # Pre-compile the impedance calculation
         self._compile_impedance_function()
 
@@ -31,18 +42,29 @@ class ImpedanceModel:
         
         # Store parameter names
         self.param_names = self._get_parameter_names()
-        
-        # Initialize params values
+
+        # Initialize with physical defaults
         self._params = {}
         for name in self.param_names:
-            if name.startswith('CPE'):
-                self._params[name] = {'value': None, 'alpha': None}  # CPE: value + alpha
-            elif name.startswith(('Ws', 'Wo', 'G')):
-                self._params[name] = {'R': None, 'tau': None}  # Ws/Wo/G: R + tau
-            elif name.startswith('H'):
-                self._params[name] = {'R': None, 'tau': None, 'alpha': None}  # Havránek: R + tau + alpha
+            param_type = ''.join([c for c in name if not c.isdigit()])
+            
+            if param_type in self.PARAM_DEFAULTS:
+                default = self.PARAM_DEFAULTS[param_type]
+                
+                if isinstance(default, dict):  # Complex parameter
+                    self._params[name] = default.copy()  # Create a new dict
+                else:
+                    self._params[name] = default
             else:
-                self._params[name] = None  # Standard components (R, C, L, W)
+                # Fallback for unknown types
+                if name.startswith('CPE'):
+                    self._params[name] = {'value': 1e-6, 'alpha': 0.8}
+                elif name.startswith(('Ws', 'Wo', 'G')):
+                    self._params[name] = {'R': 100, 'tau': 1}
+                elif name.startswith('H'):
+                    self._params[name] = {'R': 100, 'tau': 1, 'alpha': 0.5}
+                else:
+                    self._params[name] = 1.0  # Generic fallback
 
     class ParamAccessor:
         def __init__(self, parent, mode='set'):
@@ -255,33 +277,32 @@ class ImpedanceModel:
         2. Attribute-style parameters (model.set_params.X = Y)
         3. Mixed usage
         """
-        # Process input parameters if any were provided
+        temp_params = self._params.copy()
+        
+        # Process overrides
         if args or kwargs:
-            # Case 1: Array input
             if len(args) == 1 and isinstance(args[0], (list, np.ndarray)):
                 if len(args[0]) != len(self.param_names):
-                    raise ValueError(f"Expected {len(self.param_names)} parameters, got {len(args[0])}")
-                params = dict(zip(self.param_names, args[0]))
-                self.set_params(**params)
-            
-            # Case 2: Dictionary input
+                    raise ValueError(f"Expected {len(self.param_names)} parameters")
+                temp_params.update(dict(zip(self.param_names, args[0])))
             elif len(args) == 1 and isinstance(args[0], dict):
-                self.set_params(**args[0])
-            
-            # Case 3: Keyword arguments
+                temp_params.update(args[0])
             else:
-                self.set_params(**kwargs)
+                temp_params.update(kwargs)
         
-        # Prepare parameters for calculation (convert CPE dicts to tuples)
+        # Prepare calculation parameters
         calc_params = {}
-        for name, value in self._params.items():
+        for name, value in temp_params.items():
             if isinstance(value, dict):
-                # Check for missing parameters
-                missing = [k for k, v in value.items() if v is None]
-                if missing:
-                    raise ValueError(f"Missing parameters for {name}: {missing}")
+                # Verify complex parameters
+                if name.startswith('CPE') and None in (value['value'], value['alpha']):
+                    raise ValueError(f"Missing CPE parameters for {name}")
+                elif name.startswith(('Ws', 'Wo', 'G')) and None in (value['R'], value['tau']):
+                    raise ValueError(f"Missing parameters for {name}")
+                elif name.startswith('H') and None in (value['R'], value['tau'], value['alpha']):
+                    raise ValueError(f"Missing parameters for {name}")
                 
-                # Convert to tuple in the order expected by _create_compiled_impedance
+                # Convert to expected format
                 if name.startswith('CPE'):
                     calc_params[name] = (value['value'], value['alpha'])
                 elif name.startswith(('Ws', 'Wo', 'G')):
@@ -293,29 +314,47 @@ class ImpedanceModel:
                     raise ValueError(f"Missing parameter: {name}")
                 calc_params[name] = value
         
-        # Calculate impedance using stored parameters
         try:
-            try:
-                Z_total = self._impedance_func(omega, **calc_params)
-            except KeyError as e:
-                missing = set(self.param_names) - set(calc_params.keys())
-                raise ValueError(f"Missing parameters: {missing}") from e
-            
+            Z_total = self._impedance_func(omega, **calc_params)
             # CRITICAL FIX: Ensure attributes are ALWAYS updated
             self.Z_real = np.real(Z_total).copy()  # .copy() prevents view issues
             self.Z_imag = np.imag(Z_total).copy()  # Negative for Nyquist convention
-            
             # Validation
             if len(self.Z_real) != len(self.Z_imag):
                 raise ValueError(f"Real/imaginary length mismatch: {len(self.Z_real)} vs {len(self.Z_imag)}")
-                
+            return np.concatenate([np.real(Z_total), np.imag(Z_total)])
+        except KeyError as e:
+            missing = set(self.param_names) - set(calc_params.keys())
+            raise ValueError(f"Missing parameters: {missing}") from e
         except Exception as e:
             # Reset attributes on failure
             self.Z_real = None
             self.Z_imag = None
             raise ValueError(f"Impedance calculation failed: {str(e)}")
 
-        return np.concatenate([self.Z_real, self.Z_imag])
+        # Calculate impedance using stored parameters
+#        try:
+#            try:
+#                Z_total = self._impedance_func(omega, **calc_params)
+#            except KeyError as e:
+#                missing = set(self.param_names) - set(calc_params.keys())
+#                raise ValueError(f"Missing parameters: {missing}") from e
+            
+#            # CRITICAL FIX: Ensure attributes are ALWAYS updated
+#            self.Z_real = np.real(Z_total).copy()  # .copy() prevents view issues
+#            self.Z_imag = np.imag(Z_total).copy()  # Negative for Nyquist convention
+            
+#            # Validation
+#            if len(self.Z_real) != len(self.Z_imag):
+#                raise ValueError(f"Real/imaginary length mismatch: {len(self.Z_real)} vs {len(self.Z_imag)}")
+                
+#        except Exception as e:
+#            # Reset attributes on failure
+#            self.Z_real = None
+#            self.Z_imag = None
+#            raise ValueError(f"Impedance calculation failed: {str(e)}")
+
+#        return np.concatenate([self.Z_real, self.Z_imag])
         #return np.concatenate((self.Z_real, self.Z_imag))
 
 
