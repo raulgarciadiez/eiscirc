@@ -21,12 +21,18 @@ class ImpedanceModel:
             self.circuit_string = self._structure_to_string(circuit_structure)
             self.circuit_structure = circuit_structure
 
-        # Store parameter names
-        self.param_names = self._get_parameter_names()
+        
 
         # Pre-compile the impedance calculation
         self._compile_impedance_function()
+
+        self.Z_real = None  # New: Store real impedance
+        self.Z_imag = None  # New: Store imag impedance
         
+        # Store parameter names
+        self.param_names = self._get_parameter_names()
+        
+        # Initialize params values
         self._params = {}
         for name in self.param_names:
             if name.startswith('CPE'):
@@ -289,19 +295,30 @@ class ImpedanceModel:
         
         # Calculate impedance using stored parameters
         try:
-            Z_total = self._impedance_func(omega, **calc_params)
-        except KeyError as e:
-            missing = set(self.param_names) - set(calc_params.keys())
-            raise ValueError(f"Missing parameters: {missing}") from e
-        
-        # Store and return results
-        self.Z_real = np.real(Z_total)
-        self.Z_imag = np.imag(Z_total)
-        
-        if len(self.Z_real) != len(self.Z_imag):
-            raise ValueError(f"Real/imaginary length mismatch: {len(self.Z_real)} vs {len(self.Z_imag)}")
-        
-        return np.concatenate((self.Z_real, self.Z_imag))    
+            try:
+                Z_total = self._impedance_func(omega, **calc_params)
+            except KeyError as e:
+                missing = set(self.param_names) - set(calc_params.keys())
+                raise ValueError(f"Missing parameters: {missing}") from e
+            
+            # CRITICAL FIX: Ensure attributes are ALWAYS updated
+            self.Z_real = np.real(Z_total).copy()  # .copy() prevents view issues
+            self.Z_imag = np.imag(Z_total).copy()  # Negative for Nyquist convention
+            
+            # Validation
+            if len(self.Z_real) != len(self.Z_imag):
+                raise ValueError(f"Real/imaginary length mismatch: {len(self.Z_real)} vs {len(self.Z_imag)}")
+                
+        except Exception as e:
+            # Reset attributes on failure
+            self.Z_real = None
+            self.Z_imag = None
+            raise ValueError(f"Impedance calculation failed: {str(e)}")
+
+        return np.concatenate([self.Z_real, self.Z_imag])
+        #return np.concatenate((self.Z_real, self.Z_imag))
+
+
     def _structure_to_string(self, structure):
         """Convert structure tuple back to string for parameter ordering"""
         if isinstance(structure, str):
