@@ -1,1 +1,2 @@
-from .circuit_parser2 import ImpedanceModel
+from .circuit_parser import ImpedanceModel
+from .impedance_fitting import ImpedanceFitter
