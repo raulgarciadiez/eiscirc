@@ -95,6 +95,7 @@ class ImpedanceModel:
                 param_name, subkey = name.split('_', 1)
                 if param_name in self._parent._params and isinstance(self._parent._params[param_name], dict):
                     if subkey in self._parent._params[param_name]:
+                        self._parent._check_bounds(name, value)  # Add bounds check
                         self._parent._params[param_name][subkey] = value
                         return
                     raise AttributeError(f"Invalid sub-parameter '{subkey}' for {param_name}")
@@ -106,14 +107,24 @@ class ImpedanceModel:
                 if isinstance(param, dict):
                     if isinstance(value, (tuple, list)):  # Tuple input
                         if name.startswith('CPE') and len(value) == 2:
+                            self._parent._check_bounds(f"{name}_value", value[0])  # Check value
+                            self._parent._check_bounds(f"{name}_alpha", value[1])  # Check alpha
                             param.update({'value': value[0], 'alpha': value[1]})
                         elif name.startswith(('Ws', 'Wo', 'G')) and len(value) == 2:
+                            self._parent._check_bounds(f"{name}_R", value[0])    # Check R
+                            self._parent._check_bounds(f"{name}_tau", value[1])  # Check tau                            
                             param.update({'R': value[0], 'tau': value[1]})
                         elif name.startswith('H') and len(value) == 3:
+                            self._parent._check_bounds(f"{name}_R", value[0])     # Check R
+                            self._parent._check_bounds(f"{name}_tau", value[1])   # Check tau
+                            self._parent._check_bounds(f"{name}_alpha", value[2]) # Check alpha                            
                             param.update({'R': value[0], 'tau': value[1], 'alpha': value[2]})
                     else:  # Assume object with attributes
+                        for attr, val in value.__dict__.items() if hasattr(value, '__dict__') else value.items():
+                            self._parent._check_bounds(f"{name}_{attr}", val)  # Check each attribute
                         param.update(value.__dict__ if hasattr(value, '__dict__') else {})
                 else:
+                    self._parent._check_bounds(name, value)  # Check simple parameter
                     self._parent._params[name] = value
             else:
                 raise AttributeError(f"Cannot set unknown parameter '{name}'")
@@ -152,6 +163,7 @@ class ImpedanceModel:
                 param_name, subkey = key.split('_', 1)
                 if param_name in self._params and isinstance(self._params[param_name], dict):
                     if subkey in self._params[param_name]:
+                        self._check_bounds(key, value)  # Add bounds check
                         self._params[param_name][subkey] = value
                         continue
                     else:
@@ -162,22 +174,52 @@ class ImpedanceModel:
                 if isinstance(self._params[key], dict):
                     if isinstance(value, (tuple, list)):
                         if key.startswith('CPE') and len(value) == 2:
+                            self._check_bounds(f"{key}_value", value[0])  # Check value
+                            self._check_bounds(f"{key}_alpha", value[1])  # Check alpha
                             self._params[key].update({'value': value[0], 'alpha': value[1]})
                         elif key.startswith(('Ws', 'Wo', 'G')) and len(value) == 2:
+                            self._check_bounds(f"{key}_R", value[0])    # Check R
+                            self._check_bounds(f"{key}_tau", value[1])  # Check tau
                             self._params[key].update({'R': value[0], 'tau': value[1]})
                         elif key.startswith('H') and len(value) == 3:
+                            self._check_bounds(f"{key}_R", value[0])     # Check R
+                            self._check_bounds(f"{key}_tau", value[1])   # Check tau
+                            self._check_bounds(f"{key}_alpha", value[2]) # Check alpha
                             self._params[key].update({'R': value[0], 'tau': value[1], 'alpha': value[2]})
                     elif isinstance(value, dict):
+                        for subkey, subvalue in value.items():
+                            self._check_bounds(f"{key}_{subkey}", subvalue)  # Check each sub-parameter
                         self._params[key].update(value)
                     else:
                         raise ValueError(f"Invalid input format for {key}")
                 else:
+                    self._check_bounds(key, value)  # Check simple parameter
                     self._params[key] = value
             else:
                 raise ValueError(f"Unknown parameter: {key}")
         return self
 
     def _check_bounds(self, name, value):
+        """Validate against shared config"""
+        # Extract base parameter type (e.g., 'H' from 'H1_alpha')
+        base_type = ''.join([c for c in name.split('_')[0] if not c.isdigit()])
+        
+        if '_' in name:  # Sub-parameter (H1_alpha)
+            param, subkey = name.split('_', 1)
+            bounds = PARAMETER_CONFIG.get(base_type, {}).get(subkey, {}).get('bounds')
+        else:
+            bounds = PARAMETER_CONFIG.get(base_type, {}).get('bounds')
+        
+        if bounds is None:
+            return  # No bounds defined for this parameter
+        
+        if not (bounds[0] <= value <= bounds[1]):
+            raise ValueError(
+                f"{name} must be in [{bounds[0]}, {bounds[1]}], got {value}"
+            )
+
+
+    def _check_bounds_OLD(self, name, value):
         """Validate against shared config"""
         base_type = ''.join([c for c in name if not c.isdigit()])
         
