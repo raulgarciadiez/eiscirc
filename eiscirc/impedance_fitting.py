@@ -1,3 +1,5 @@
+from .impedance_parameters_default import PARAMETER_CONFIG, initialize_parameters, initialize_bounds
+
 import numpy as np
 from scipy.optimize import curve_fit
 from typing import Dict, Tuple, Optional, List
@@ -12,20 +14,6 @@ class FitResult:
     Z_fit: np.ndarray                  # Fitted impedance (Z_real + Z_imag)
 
 class ImpedanceFitter:
-    # Physical defaults and bounds
-    PARAM_DEFAULTS = {
-        'R': (100, (1e-3, 1e6)),        # Resistance (Ω)
-        'C': (1e-6, (1e-12, 1e-2)),     # Capacitance (F)
-        'L': (1e-3, (1e-9, 1)),         # Inductance (H)
-        'W': (100, (1e-3, 1e6)),        # Warburg
-        'Ws': {'R': (100, (1e-3, 1e6)), 'tau': (1, (1e-6, 100))},
-        'Wo': {'R': (100, (1e-3, 1e6)), 'tau': (1, (1e-6, 100))},
-        'CPE': {'value': (1e-6, (1e-12, 1e-2)), 'alpha': (0.8, (0.001, 1.0))},
-        'G': {'R': (100, (1e-3, 1e6)), 'tau': (1, (1e-6, 100))},
-        'H': {'R': (100, (1e-3, 1e6)), 'tau': (1, (1e-6, 100)), 'alpha': (0.5, (0.001, 1.0))}
-    }
-
-
     def __init__(self, model, frequencies: np.ndarray, Z_data: np.ndarray):
         """
         Args:
@@ -39,16 +27,84 @@ class ImpedanceFitter:
         self.Z_data = Z_data
         
         self.fixed_params = {}
-        self.bounds = {}
+        #self.bounds = {}
         self.initial_guess = {}
         self._fitted_params = None
         self._covariance = None
 
         # Initialize all parameters with physical defaults
+        #self._initialize_parameters()
+        
+        # Use shared initialization
         self._initialize_parameters()
-
-
+        
     def _initialize_parameters(self):
+        """Initialize using shared config"""
+        # 1. Ensure model parameters are initialized
+        if not hasattr(self.model, '_params') or not self.model._params:
+            self.model._params = initialize_parameters(self.model.param_names)
+        
+        # 2. Initialize bounds
+        self.bounds = initialize_bounds(self.model.param_names)
+        
+        # 3. Apply any fixed params or initial guesses
+        self._apply_user_constraints()
+        
+        # 4. Calculate initial impedance if possible
+        self._update_model_impedance()
+        
+    def _apply_user_constraints(self):
+        """Apply user-provided fixed params and initial guesses"""
+        # Apply fixed parameters
+        for name, value in self.fixed_params.items():
+            self._update_model_param(name, value)
+            
+        # Apply initial guesses (only to non-fixed parameters)
+        for name, value in self.initial_guess.items():
+            if not any(name.startswith(p.split('_')[0]) for p in self.fixed_params):
+                self._update_model_param(name, value)
+    
+    def _update_model_param(self, name, value):
+        """Update parameter with bounds checking"""
+        # Extract base parameter type for bounds checking
+        param_type = ''.join([c for c in name.split('_')[0] if not c.isdigit()])
+        
+        if '_' in name:  # Sub-parameter
+            param, subkey = name.split('_', 1)
+            bound = PARAMETER_CONFIG[param_type][subkey]['bounds']
+            if not (bound[0] <= value <= bound[1]):
+                raise ValueError(f"{name} must be in {bound}")
+                
+            if param not in self.model._params:
+                self.model._params[param] = {}
+            self.model._params[param][subkey] = value
+            
+        else:  # Simple parameter
+            bound = PARAMETER_CONFIG[param_type]['bounds']
+            if not (bound[0] <= value <= bound[1]):
+                raise ValueError(f"{name} must be in {bound}")
+            self.model._params[name] = value
+
+
+
+    def _setup_bounds(self):
+        """Configure bounds from shared config"""
+        self.bounds = {}
+        for name in self.model.param_names:
+            base_type = ''.join([c for c in name if not c.isdigit()])
+            
+            if base_type in PARAMETER_CONFIG:
+                config = PARAMETER_CONFIG[base_type]
+                
+                if 'bounds' in config:  # Simple parameter
+                    self.bounds[name] = config['bounds']
+                else:  # Complex parameter
+                    for subkey, subconfig in config.items():
+                        self.bounds[f"{name}_{subkey}"] = subconfig['bounds']
+
+
+
+    def _initialize_parameters_OLD(self):
         """Initialize all parameters with physical defaults and bounds"""
         for name in self.model.param_names:
             # Determine parameter type (R, C, CPE, Ws, etc.)
