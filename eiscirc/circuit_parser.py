@@ -35,6 +35,7 @@ class ImpedanceModel:
         # Initialize with physical defaults
         self._params = initialize_parameters(self.param_names)
 
+        self._local_bounds = {}  # Store instance-specific bounds
         
 #        self._params = {}
 #        for name in self.param_names:
@@ -58,7 +59,103 @@ class ImpedanceModel:
 #                else:
 #                    self._params[name] = 1.0  # Generic fallback
 
+
     class ParamAccessor:
+        def __init__(self, parent, mode='set'):
+            self._parent = parent
+            self._mode = mode
+            
+        def __getattr__(self, name):
+            if '_' in name:
+                # Handle underscore notation (e.g., "CPE1_alpha")
+                param_name, subkey = name.split('_', 1)
+                if param_name in self._parent._params and isinstance(self._parent._params[param_name], dict):
+                    if subkey in self._parent._params[param_name]:
+                        return self._parent._params[param_name][subkey]
+                    raise AttributeError(f"Invalid sub-parameter '{subkey}' for {param_name}")
+                raise AttributeError(f"Unknown parameter: {param_name}")
+            
+            # Standard parameter access
+            if name in self._parent._params:
+                param = self._parent._params[name]
+                if isinstance(param, dict):
+                    # Return a dynamic object with bounds checking on setattr
+                    return self._create_param_proxy(name, param)
+                return param
+            raise AttributeError(f"No parameter '{name}'")
+            
+        def _create_param_proxy(self, param_name, param_dict):
+            """Create a proxy object that validates bounds on attribute set"""
+            parent = self._parent
+            
+            class ParamProxy:
+                def __getattr__(self, attr):
+                    if attr in param_dict:
+                        return param_dict[attr]
+                    raise AttributeError(f"No such sub-parameter '{attr}'")
+                
+                def __setattr__(self, attr, value):
+                    if attr in param_dict:
+                        full_name = f"{param_name}_{attr}"
+                        parent._check_bounds(full_name, value)
+                        param_dict[attr] = value
+                    else:
+                        super().__setattr__(attr, value)
+            
+            return ParamProxy()
+            
+        def __setattr__(self, name, value):
+            if name in ['_parent', '_mode']:
+                super().__setattr__(name, value)
+                return
+                
+            # Handle underscore notation
+            if '_' in name:
+                param_name, subkey = name.split('_', 1)
+                if param_name in self._parent._params and isinstance(self._parent._params[param_name], dict):
+                    if subkey in self._parent._params[param_name]:
+                        self._parent._check_bounds(name, value)
+                        self._parent._params[param_name][subkey] = value
+                        return
+                    raise AttributeError(f"Invalid sub-parameter '{subkey}' for {param_name}")
+                raise AttributeError(f"Unknown parameter: {param_name}")
+            
+            # Standard parameter setting
+            if name in self._parent._params:
+                param = self._parent._params[name]
+                if isinstance(param, dict):
+                    if isinstance(value, (tuple, list)):
+                        # Handle tuple input
+                        if name.startswith('CPE') and len(value) == 2:
+                            self._parent._check_bounds(f"{name}_value", value[0])
+                            self._parent._check_bounds(f"{name}_alpha", value[1])
+                            param.update({'value': value[0], 'alpha': value[1]})
+                        elif name.startswith(('Ws', 'Wo', 'G')) and len(value) == 2:
+                            self._parent._check_bounds(f"{name}_R", value[0])
+                            self._parent._check_bounds(f"{name}_tau", value[1])
+                            param.update({'R': value[0], 'tau': value[1]})
+                        elif name.startswith('H') and len(value) == 3:
+                            self._parent._check_bounds(f"{name}_R", value[0])
+                            self._parent._check_bounds(f"{name}_tau", value[1])
+                            self._parent._check_bounds(f"{name}_alpha", value[2])
+                            param.update({'R': value[0], 'tau': value[1], 'alpha': value[2]})
+                    elif isinstance(value, dict):
+                        # Handle dict input
+                        for subkey, subvalue in value.items():
+                            full_name = f"{name}_{subkey}"
+                            self._parent._check_bounds(full_name, subvalue)
+                        param.update(value)
+                    else:
+                        raise ValueError(f"Invalid input format for {name}")
+                else:
+                    # Simple parameter
+                    self._parent._check_bounds(name, value)
+                    self._parent._params[name] = value
+            else:
+                raise AttributeError(f"Cannot set unknown parameter '{name}'")
+
+
+    class ParamAccessor_OLD:
         def __init__(self, parent, mode='set'):
             self._parent = parent
             self._mode = mode  # 'set' or 'get'
@@ -129,8 +226,103 @@ class ImpedanceModel:
             else:
                 raise AttributeError(f"Cannot set unknown parameter '{name}'")
 
+    
+    def set_bounds(self, **bounds):
+        """Set instance-specific parameter bounds"""
+        for param, bound in bounds.items():
+            # First validate the parameter exists
+            if '_' in param:
+                param_part = param.split('_')[0]
+                if param_part not in self._params:
+                    raise ValueError(f"Unknown parameter: {param_part}")
+            elif param not in self._params:
+                raise ValueError(f"Unknown parameter: {param}")
+                
+            # Validate bound format
+            if not isinstance(bound, (tuple, list)) or len(bound) != 2:
+                raise ValueError(f"Bounds for {param} must be a (min, max) tuple")
+            
+            self._local_bounds[param] = (float(bound[0]), float(bound[1]))
+        return self
+
+
+    def get_bounds(self, param_name):
+        """Get bounds for any parameter name format"""
+        # 1. Check instance-specific bounds first
+        if param_name in self._local_bounds:
+            return self._local_bounds[param_name]
+        
+        # 2. Parse parameter name
+        if '_' in param_name:
+            # For sub-parameters like CPEa_alpha
+            prefix = param_name.split('_')[0]
+            subkey = param_name.split('_')[1]
+            base_type = re.sub(r'\d+', '', prefix)  # Remove numbers
+            base_type = re.sub(r'[a-z]+$', '', base_type)  # Remove trailing letters
+        else:
+            # For simple parameters like Rs
+            base_type = re.sub(r'\d+', '', param_name)
+            base_type = re.sub(r'[a-z]+$', '', base_type)
+            subkey = None
+
+        # 3. Look up in PARAMETER_CONFIG
+        if subkey:
+            # For sub-parameters
+            config = PARAMETER_CONFIG.get(base_type, {})
+            if subkey in config:
+                return config[subkey].get('bounds')
+        else:
+            # For simple parameters
+            config = PARAMETER_CONFIG.get(base_type, {})
+            if 'bounds' in config:
+                return config['bounds']
+        
+        return None
+
+    @property
+    def bounds(self):
+        """Dictionary-like access to bounds with smart matching"""
+        class BoundsDict(dict):
+            def __getitem__(self, key):
+                bounds = self._model.get_bounds(key)
+                if bounds is None:
+                    raise KeyError(f"No bounds defined for {key}")
+                return bounds
+            
+            def __setitem__(self, key, value):
+                if not isinstance(value, (tuple, list)) or len(value) != 2:
+                    raise ValueError("Bounds must be a (min, max) tuple")
+                self._model._local_bounds[key] = tuple(float(x) for x in value)
+            
+            def __init__(inner_self, model):
+                inner_self._model = model
+                
+        return BoundsDict(self)
+
 
     def _get_parameter_names(self):
+        """Extract complete component names in original circuit order"""
+        if not hasattr(self, 'circuit_string'):
+            return []
+        
+        # This regex matches:
+        # - Standard components: R, L, C, W followed by numbers/letters (R1, C2b, L10, Rs, Rct)
+        # - CPE components: CPE followed by letters/numbers (CPE1, CPEox)
+        # - Special elements: Ws, Wo, G, H followed by numbers/letters (Ws1, Wodiff, G1, Hfilm)
+        pattern = r'\b([RLW]\w+|C(?!PE)\w+|CPE\w+|Ws\w+|Wo\w+|G\w+|H\w+)\b'
+        components = re.findall(pattern, self.circuit_string)
+        
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_components = []
+        for comp in components:
+            if comp not in seen:
+                seen.add(comp)
+                unique_components.append(comp)
+        
+        return unique_components
+
+    def _get__OLD(self):
         """Extract complete component names in original circuit order"""
         if not hasattr(self, 'circuit_string'):
             return []
@@ -151,7 +343,69 @@ class ImpedanceModel:
         
         return unique_components
 
+
     def set_params(self, **kwargs):
+        """Handle all parameter setting styles with bounds checking"""
+        for key, value in kwargs.items():
+            # Handle underscore notation (like H1_alpha=0.8)
+            if '_' in key and not key.startswith(('CPE_', 'Ws_', 'Wo_', 'G_', 'H_')):
+                param_name, subkey = key.split('_', 1)
+                if param_name in self._params and isinstance(self._params[param_name], dict):
+                    if subkey in self._params[param_name]:
+                        self._check_bounds(key, value)
+                        self._params[param_name][subkey] = value
+                        continue
+                    else:
+                        raise ValueError(f"Invalid sub-parameter '{subkey}' for {param_name}")
+
+            # Handle direct parameter setting
+            if key in self._params:
+                param = self._params[key]
+                
+                # SIMPLE PARAMETER CASE (R, C, L, W, etc.)
+                if not isinstance(param, dict):
+                    self._check_bounds(key, value)
+                    self._params[key] = value
+                    continue
+                    
+                # COMPLEX PARAMETER CASE (CPE, Ws, Wo, G, H)
+                if isinstance(value, (tuple, list)):
+                    if key.startswith('CPE') and len(value) == 2:
+                        self._check_bounds(f"{key}_value", value[0])
+                        self._check_bounds(f"{key}_alpha", value[1])
+                        param.update({'value': value[0], 'alpha': value[1]})
+                    elif key.startswith(('Ws', 'Wo', 'G')) and len(value) == 2:
+                        self._check_bounds(f"{key}_R", value[0])
+                        self._check_bounds(f"{key}_tau", value[1])
+                        param.update({'R': value[0], 'tau': value[1]})
+                    elif key.startswith('H') and len(value) == 3:
+                        self._check_bounds(f"{key}_R", value[0])
+                        self._check_bounds(f"{key}_tau", value[1])
+                        self._check_bounds(f"{key}_alpha", value[2])
+                        param.update({'R': value[0], 'tau': value[1], 'alpha': value[2]})
+                    else:
+                        raise ValueError(f"Invalid tuple length for {key}. Expected {self._get_expected_format(key)}")
+                elif isinstance(value, dict):
+                    for subkey, subvalue in value.items():
+                        full_key = f"{key}_{subkey}"
+                        if subkey in param:
+                            self._check_bounds(full_key, subvalue)
+                            param[subkey] = subvalue
+                        else:
+                            raise ValueError(f"Invalid sub-parameter '{subkey}' for {key}")
+                else:
+                    # This is where we were getting the error - now properly handles simple numeric values
+                    if isinstance(value, (int, float)):
+                        self._check_bounds(key, value)
+                        self._params[key] = value
+                    else:
+                        raise ValueError(f"Invalid input format for {key}. Expected {self._get_expected_format(key)}")
+            else:
+                raise ValueError(f"Unknown parameter: {key}")
+        return self
+
+
+    def set_params_OLD(self, **kwargs):
         """Handle all parameter setting styles:
         - model.set_params(Ws1=(100, 0.5))  # tuple
         - model.set_params(Ws1={'R':100, 'tau':0.5})  # dict
@@ -234,7 +488,20 @@ class ImpedanceModel:
                 f"{name} must be in [{bounds[0]}, {bounds[1]}], got {value}"
             )
 
+
     def _get_expected_format(self, name):
+        """Helper to generate error messages for parameters"""
+        if name.startswith('CPE'):
+            return "(value, alpha)"
+        elif name.startswith(('Ws', 'Wo', 'G')):
+            return "(R, tau)"
+        elif name.startswith('H'):
+            return "(R, tau, alpha)"
+        else:  # Simple parameters (R, C, L, W, etc.)
+            return "single value"
+
+
+    def _get_expected_format_OLD(self, name):
         """Helper to generate error messages for multi-param elements"""
         if name.startswith('CPE'):
             return "(value, alpha)"
@@ -827,3 +1094,14 @@ def parse_circuit(expression):
         return expr
     
     return parse(expression)
+
+class ModelBoundsAccessor:
+    """Helper class for dictionary-style bounds access"""
+    def __init__(self, model):
+        self._model = model
+        
+    def __getitem__(self, key):
+        return self._model.get_bounds(key)
+        
+    def __setitem__(self, key, value):
+        self._model.set_bounds(**{key: value})
