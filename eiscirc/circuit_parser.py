@@ -33,7 +33,9 @@ class ImpedanceModel:
         self.param_names = self._get_parameter_names()
 
         # Initialize with physical defaults
-        self._params = initialize_parameters(self.param_names)
+        #self._params = initialize_parameters(self.param_names)
+        self._params = {}
+        self._initialize_all_parameters()
 
         self._local_bounds = {}  # Store instance-specific bounds
         
@@ -58,40 +60,245 @@ class ImpedanceModel:
 #                    self._params[name] = {'R': 100, 'tau': 1, 'alpha': 0.5}
 #                else:
 #                    self._params[name] = 1.0  # Generic fallback
+    def _initialize_all_parameters(self):
+        """Initialize all parameters with their default values from PARAMETER_CONFIG"""
+        for name in self.param_names:
+            base_type = ''.join([c for c in name if not c.isdigit() and not c.islower()])
+            
+            if base_type in PARAMETER_CONFIG:
+                config = PARAMETER_CONFIG[base_type]
+                
+                if 'default' in config:  # Simple parameter (R, C, L, W)
+                    self._params[name] = config['default']
+                else:  # Complex parameter (CPE, Ws, etc.)
+                    self._params[name] = {}
+                    for subkey, subconfig in config.items():
+                        self._params[name][subkey] = subconfig['default']
+            else:
+                # Fallback for unknown types
+                self._params[name] = {'value': 1.0, 'alpha': 0.8} if base_type == 'CPE' else 1.0
 
+
+
+    def set_params(self, **kwargs):
+        """Handle all parameter setting patterns with proper validation"""
+        for key, value in kwargs.items():
+            # Handle underscore notation (e.g., "CPEa_alpha")
+            if '_' in key:
+                param_name, subkey = key.split('_', 1)
+                if param_name in self._params and isinstance(self._params[param_name], dict):
+                    if subkey in self._params[param_name]:
+                        self._check_bounds(key, value)
+                        self._params[param_name][subkey] = value
+                        continue
+                    raise ValueError(f"Invalid sub-parameter '{subkey}' for {param_name}")
+                raise ValueError(f"Unknown parameter: {param_name}")
+
+            # Handle direct parameter setting
+            if key in self._params:
+                param = self._params[key]
+                
+                # Complex parameter case
+                if isinstance(param, dict):
+                    if isinstance(value, dict):
+                        for subkey in value:
+                            if subkey not in param:
+                                raise ValueError(f"Invalid sub-parameter '{subkey}' for {key}")
+                        for subkey, subvalue in value.items():
+                            self._check_bounds(f"{key}_{subkey}", subvalue)
+                            param[subkey] = subvalue
+                    else:
+                        raise ValueError(f"Parameter {key} requires dictionary input")
+                # Simple parameter case
+                else:
+                    self._check_bounds(key, value)
+                    self._params[key] = value
+            else:
+                raise ValueError(f"Unknown parameter: {key}")
+        return self
+
+    def _get_parameter(self, name):
+        """Get parameter value or dict by name, handling all naming formats"""
+        # First try exact match
+        if name in self._params:
+            return self._params[name]
+        
+        # Then try matching base type (for CPEa, CPE1, etc.)
+        base_type = re.match(r'^([A-Za-z]+)', name)
+        if base_type:
+            base_type = base_type.group(1)
+            for param_name, param in self._params.items():
+                if param_name.startswith(base_type):
+                    return param
+        return None
+    
 
     class ParamAccessor:
+        def __init__(self, parent):
+            self._parent = parent
+
+        def __getattr__(self, name):
+            # Handle direct access (model.params.CPEa)
+            if name in self._parent._params:
+                param = self._parent._params[name]
+                if isinstance(param, dict):
+                    return ParameterProxy(self._parent, name, param)
+                return param
+            
+            # Handle component type access (matches any suffix)
+            base_type = re.match(r'^([A-Za-z]+)', name)
+            if base_type:
+                base_type = base_type.group(1)
+                for param_name, param in self._parent._params.items():
+                    if param_name.startswith(base_type):
+                        if isinstance(param, dict):
+                            return ParameterProxy(self._parent, param_name, param)
+                        return param
+            
+            raise AttributeError(f"No parameter '{name}'")
+
+        def __setattr__(self, name, value):
+            if name == '_parent':
+                super().__setattr__(name, value)
+                return
+            
+            self._parent.set_params(**{name: value})
+
+
+    class ParamAccessor_OLD4:
+        def __init__(self, parent):  # Removed mode parameter
+            self._parent = parent
+
+        def __getattr__(self, name):
+            # Handle direct parameter access
+            if name in self._parent._params:
+                param = self._parent._params[name]
+                if isinstance(param, dict):
+                    return ParameterProxy(self._parent, name, param)
+                return param
+            
+            # Handle component type access (matches any suffix)
+            base_type = re.match(r'^([A-Za-z]+)', name)
+            if base_type:
+                base_type = base_type.group(1)
+                for param_name, param in self._parent._params.items():
+                    if param_name.startswith(base_type):
+                        if isinstance(param, dict):
+                            return ParameterProxy(self._parent, param_name, param)
+                        return param
+            
+            raise AttributeError(f"No parameter '{name}'")
+
+        def __setattr__(self, name, value):
+            if name == '_parent':
+                super().__setattr__(name, value)
+                return
+            
+            # Delegate all parameter setting to set_params
+            self._parent.set_params(**{name: value})
+
+
+    class ParamAccessor_OLD3:
+        def __init__(self, parent):
+            self._parent = parent
+
+        def __getattr__(self, name):
+            # Handle direct parameter access (like model.params.CPEa)
+            if name in self._parent._params:
+                param = self._parent._params[name]
+                if isinstance(param, dict):
+                    return ParameterProxy(self._parent, name, param)
+                return param
+            
+            # Handle component type access (matches any suffix)
+            base_type = re.match(r'^([A-Za-z]+)', name)
+            if base_type:
+                base_type = base_type.group(1)
+                for param_name, param in self._parent._params.items():
+                    if param_name.startswith(base_type):
+                        if isinstance(param, dict):
+                            return ParameterProxy(self._parent, param_name, param)
+                        return param
+            
+            raise AttributeError(f"No parameter '{name}'")
+
+        def __setattr__(self, name, value):
+            if name == '_parent':
+                super().__setattr__(name, value)
+                return
+            
+            # Handle direct parameter setting
+            if name in self._parent._params:
+                param = self._parent._params[name]
+                if isinstance(param, dict):
+                    if isinstance(value, dict):
+                        for k, v in value.items():
+                            self._parent._check_bounds(f"{name}_{k}", v)
+                        param.update(value)
+                    else:
+                        raise ValueError("Complex parameters require dictionary input")
+                else:
+                    self._parent._check_bounds(name, value)
+                    self._parent._params[name] = value
+            else:
+                raise AttributeError(f"Cannot set unknown parameter '{name}'")
+
+
+
+
+    class ParamAccessor_OLD2:
         def __init__(self, parent, mode='set'):
             self._parent = parent
-            self._mode = mode
-            
+            self._mode = mode  # 'set' or 'get'
+
         def __getattr__(self, name):
             if '_' in name:
-                # Handle underscore notation (e.g., "CPE1_alpha")
+                # Handle underscore notation (e.g., "CPEa_alpha")
                 param_name, subkey = name.split('_', 1)
-                if param_name in self._parent._params and isinstance(self._parent._params[param_name], dict):
-                    if subkey in self._parent._params[param_name]:
-                        return self._parent._params[param_name][subkey]
-                    raise AttributeError(f"Invalid sub-parameter '{subkey}' for {param_name}")
-                raise AttributeError(f"Unknown parameter: {param_name}")
+                param = self._get_param_dict(param_name)
+                if subkey in param:
+                    return param[subkey]
+                raise AttributeError(f"Invalid sub-parameter '{subkey}' for {param_name}")
             
             # Standard parameter access
             if name in self._parent._params:
                 param = self._parent._params[name]
                 if isinstance(param, dict):
-                    # Return a dynamic object with bounds checking on setattr
                     return self._create_param_proxy(name, param)
                 return param
             raise AttributeError(f"No parameter '{name}'")
+
+        def _get_param_dict(self, param_name):
+            """Get parameter dict handling both numbered and letter-suffixed names"""
+            # First try exact match
+            if param_name in self._parent._params:
+                param = self._parent._params[param_name]
+                if isinstance(param, dict):
+                    return param
             
+            # Then try to find matching base parameter
+            base_type = re.match(r'^([A-Za-z]+)', param_name).group(1)
+            for key in self._parent._params:
+                if key.startswith(base_type) and isinstance(self._parent._params[key], dict):
+                    return self._parent._params[key]
+            
+            raise AttributeError(f"No such parameter '{param_name}'")
+
         def _create_param_proxy(self, param_name, param_dict):
-            """Create a proxy object that validates bounds on attribute set"""
+            """Create a proxy object with bounds checking"""
             parent = self._parent
             
             class ParamProxy:
                 def __getattr__(self, attr):
                     if attr in param_dict:
                         return param_dict[attr]
+                    # Try to find matching subparameter in any same-type component
+                    base_type = re.match(r'^([A-Za-z]+)', param_name).group(1)
+                    for key in parent._params:
+                        if (key.startswith(base_type) and 
+                            isinstance(parent._params[key], dict) and 
+                            attr in parent._params[key]):
+                            return parent._params[key][attr]
                     raise AttributeError(f"No such sub-parameter '{attr}'")
                 
                 def __setattr__(self, attr, value):
@@ -344,7 +551,7 @@ class ImpedanceModel:
         return unique_components
 
 
-    def set_params(self, **kwargs):
+    def set_params_OLD2(self, **kwargs):
         """Handle all parameter setting styles with bounds checking"""
         for key, value in kwargs.items():
             # Handle underscore notation (like H1_alpha=0.8)
@@ -512,9 +719,14 @@ class ImpedanceModel:
         return "single value"
     
     @property
-    def params(self):
+    def params_OLD2(self):
         """Attribute-style parameter access (params.R0 = 10)"""
         return self.ParamAccessor(self, mode='set')
+    
+    @property
+    def params(self):
+        """Attribute-style parameter access (params.R0 = 10)"""
+        return self.ParamAccessor(self)  # Removed mode argument
     
     @property
     def param_values(self):
@@ -586,7 +798,91 @@ class ImpedanceModel:
         else:
             raise ValueError("Unknown structure format")
 
+
     def impedance(self, omega, *args, **kwargs):
+        """
+        Unified impedance calculation that handles:
+        - All parameter input formats
+        - Proper parameter conversion for calculation
+        - Maintains bounds checking
+        """
+        # Process parameter updates if provided
+        if args or kwargs:
+            if len(args) == 1 and isinstance(args[0], (list, np.ndarray)):
+                if len(args[0]) != len(self.param_names):
+                    raise ValueError(f"Expected {len(self.param_names)} parameters")
+                self.set_params(**dict(zip(self.param_names, args[0])))
+            elif len(args) == 1 and isinstance(args[0], dict):
+                self.set_params(**args[0])
+            else:
+                # Handle both tuple and dict inputs for complex parameters
+                processed_kwargs = {}
+                for name, value in kwargs.items():
+                    if name in self._params and isinstance(self._params[name], dict):
+                        if isinstance(value, (tuple, list)):
+                            if name.startswith('CPE') and len(value) == 2:
+                                processed_kwargs.update({
+                                    f"{name}_value": value[0],
+                                    f"{name}_alpha": value[1]
+                                })
+                            elif name.startswith(('Ws', 'Wo', 'G')) and len(value) == 2:
+                                processed_kwargs.update({
+                                    f"{name}_R": value[0],
+                                    f"{name}_tau": value[1]
+                                })
+                            elif name.startswith('H') and len(value) == 3:
+                                processed_kwargs.update({
+                                    f"{name}_R": value[0],
+                                    f"{name}_tau": value[1],
+                                    f"{name}_alpha": value[2]
+                                })
+                            else:
+                                raise ValueError(f"Invalid tuple format for {name}")
+                        else:
+                            processed_kwargs[name] = value
+                    else:
+                        processed_kwargs[name] = value
+                self.set_params(**processed_kwargs)
+
+        # Prepare parameters for calculation
+        calc_params = {}
+        for name, value in self._params.items():
+            if isinstance(value, dict):
+                # Verify all sub-parameters are set
+                if None in value.values():
+                    raise ValueError(f"Missing parameters for {name}")
+                
+                # Convert to calculation format
+                if name.startswith('CPE'):
+                    calc_params[name] = (value['value'], value['alpha'])
+                elif name.startswith(('Ws', 'Wo', 'G')):
+                    calc_params[name] = (value['R'], value['tau'])
+                elif name.startswith('H'):
+                    calc_params[name] = (value['R'], value['tau'], value['alpha'])
+                else:
+                    raise ValueError(f"Unknown complex parameter type: {name}")
+            else:
+                if value is None:
+                    raise ValueError(f"Missing parameter: {name}")
+                calc_params[name] = value
+
+        # Calculate impedance
+        try:
+            Z_total = self._impedance_func(omega, **calc_params)
+            self.Z_real = np.real(Z_total).copy()
+            self.Z_imag = np.imag(Z_total).copy()
+            
+            if len(self.Z_real) != len(self.Z_imag):
+                raise ValueError(f"Real/imaginary length mismatch: {len(self.Z_real)} vs {len(self.Z_imag)}")
+            
+            return np.concatenate([self.Z_real, self.Z_imag])
+            
+        except Exception as e:
+            self.Z_real = self.Z_imag = None
+            raise ValueError(f"Impedance calculation failed: {str(e)}")
+
+
+    def impedance_OLD(self, omega, *args, **kwargs):
         """
         Unified impedance calculation that:
         1. Permanently updates model parameters if new values are provided
@@ -1105,3 +1401,27 @@ class ModelBoundsAccessor:
         
     def __setitem__(self, key, value):
         self._model.set_bounds(**{key: value})
+
+
+
+class ParameterProxy:
+    """Handles dot notation access for complex parameters"""
+    def __init__(self, parent, param_name, param_dict):
+        self._parent = parent
+        self._param_name = param_name
+        self._param_dict = param_dict
+
+    def __getattr__(self, name):
+        if name in self._param_dict:
+            return self._param_dict[name]
+        raise AttributeError(f"No sub-parameter '{name}' in {self._param_name}")
+
+    def __setattr__(self, name, value):
+        if name in ['_parent', '_param_name', '_param_dict']:
+            super().__setattr__(name, value)
+            return
+            
+        if name in self._param_dict:
+            self._parent.set_params(**{f"{self._param_name}_{name}": value})
+        else:
+            raise AttributeError(f"Cannot set unknown sub-parameter '{name}'")
