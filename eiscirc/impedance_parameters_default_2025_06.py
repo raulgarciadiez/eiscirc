@@ -1,5 +1,3 @@
-# impedance_parameters_default.py
-
 import numpy as np
 import re
 
@@ -8,7 +6,7 @@ PARAMETER_CONFIG = {
     'R': {
         'default': 100,
         'bounds': (1e-3, 1e6),
-        'description': 'Resistance (Ω)'
+        'description': 'Resistance (Ω)'
     },
     'C': {
         'default': 1e-6,
@@ -20,14 +18,14 @@ PARAMETER_CONFIG = {
         'bounds': (1e-9, 1),
         'description': 'Inductance (H)'
     },
-
+    
     # Distributed elements
     'W': {
         'default': 100,
         'bounds': (1e-3, 1e6),
-        'description': 'Semi-infinite Warburg (Ω/s^0.5)'
+        'description': 'Semi-infinite Warburg (Ω/s^0.5)'
     },
-
+    
     # Constant Phase Element
     'CPE': {
         'value': {
@@ -41,13 +39,13 @@ PARAMETER_CONFIG = {
             'description': 'CPE exponent (0=resistor, 1=capacitor)'
         }
     },
-
+    
     # Finite-length Warburg elements
     'Ws': {
         'R': {
             'default': 100,
             'bounds': (1e-3, 1e6),
-            'description': 'Finite Warburg resistance (Ω)'
+            'description': 'Finite Warburg resistance (Ω)'
         },
         'tau': {
             'default': 1,
@@ -59,7 +57,7 @@ PARAMETER_CONFIG = {
         'R': {
             'default': 100,
             'bounds': (1e-3, 1e6),
-            'description': 'Open Warburg resistance (Ω)'
+            'description': 'Open Warburg resistance (Ω)'
         },
         'tau': {
             'default': 1,
@@ -67,13 +65,13 @@ PARAMETER_CONFIG = {
             'description': 'Diffusion time constant (s)'
         }
     },
-
+    
     # Gerischer impedance
     'G': {
         'R': {
             'default': 100,
             'bounds': (1e-3, 1e6),
-            'description': 'Gerischer resistance (Ω)'
+            'description': 'Gerischer resistance (Ω)'
         },
         'tau': {
             'default': 1,
@@ -81,13 +79,13 @@ PARAMETER_CONFIG = {
             'description': 'Characteristic time (s)'
         }
     },
-
+    
     # Havránek impedance
     'H': {
         'R': {
             'default': 100,
             'bounds': (1e-3, 1e6),
-            'description': 'Havránek resistance (Ω)'
+            'description': 'Havránek resistance (Ω)'
         },
         'tau': {
             'default': 1,
@@ -100,13 +98,13 @@ PARAMETER_CONFIG = {
             'description': 'Exponent (0-1)'
         }
     },
-
+    
     # Transmission Line Model (if implemented)
     'TLM': {
         'R': {
             'default': 100,
             'bounds': (1e-3, 1e6),
-            'description': 'Longitudinal resistance (Ω)'
+            'description': 'Longitudinal resistance (Ω)'
         },
         'C': {
             'default': 1e-6,
@@ -121,38 +119,53 @@ PARAMETER_CONFIG = {
     }
 }
 
-#def extract_base_type(name: str) -> str:
-#    """Extract component type from full parameter name (e.g., 'CPEa' -> 'CPE')"""
-#    match = re.match(r'^([A-Za-z]+)', name)
-#    return match.group(1) if match else name
-
-def extract_base_type(name: str) -> str:
-    for known_type in sorted(PARAMETER_CONFIG.keys(), key=len, reverse=True):
-        if name.startswith(known_type):
-            return known_type
-    return name  # fallback
-
-def initialize_parameters(param_names):
+def initialize_parameters_OLD(param_names):
+    """Initialize parameters with defaults"""
     params = {}
     for name in param_names:
-        base_type = extract_base_type(name)
-        config = PARAMETER_CONFIG.get(base_type, {})
-
-        if 'default' in config:
+        param_type = ''.join([c for c in name if not c.isdigit()])
+        config = PARAMETER_CONFIG.get(param_type, {})
+        
+        if not config:
+            raise ValueError(f"Unknown parameter type: {param_type}")
+            
+        if 'default' in config:  # Simple parameter
             params[name] = config['default']
-        else:
-            params[name] = {k: v['default'] for k, v in config.items() if 'default' in v}
+        else:  # Complex parameter
+            params[name] = {k: v['default'] for k, v in config.items()}
+    
+    return params
+
+def initialize_parameters(param_names):
+    """Initialize parameters with defaults"""
+    params = {}
+    for name in param_names:
+        # Extract base type (everything up to first digit or everything if no digits)
+        base_type = re.match(r'^([A-Za-z]+)', name).group(1)
+        
+        config = PARAMETER_CONFIG.get(base_type, {})
+        
+        if 'default' in config:  # Simple parameter
+            params[name] = config['default']
+        else:  # Complex parameter
+            params[name] = {
+                k: v['default'] 
+                for k, v in config.items()
+                if 'default' in v
+            }
     return params
 
 def initialize_bounds(param_names):
+    """Initialize bounds dictionary"""
     bounds = {}
     for name in param_names:
-        base_type = extract_base_type(name)
-        config = PARAMETER_CONFIG.get(base_type, {})
-
-        if 'bounds' in config:
+        param_type = ''.join([c for c in name if not c.isdigit()])
+        config = PARAMETER_CONFIG.get(param_type, {})
+        
+        if 'bounds' in config:  # Simple parameter
             bounds[name] = config['bounds']
-        else:
+        else:  # Complex parameter
             for subkey, subconfig in config.items():
                 bounds[f"{name}_{subkey}"] = subconfig['bounds']
+    
     return bounds
