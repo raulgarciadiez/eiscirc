@@ -21,7 +21,7 @@ Designed for electrochemical systems, battery analysis, materials characterizati
 
 ```bash
 pip install numpy scipy matplotlib
-
+```
 
 ## Quick Start
 
