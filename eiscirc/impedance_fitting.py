@@ -28,23 +28,56 @@ class ImpedanceFitter:
         self.Z_data = Z_data
 
         self.fixed_params = {}
-        self.initial_guess = {}
+        #self.initial_guess = {}
         self._fitted_params = None
         self._covariance = None
 
         self._initialize_parameters()
+    
+    @property
+    def bounds(self):
+        return self.model.bounds
+    
+    @property
+    def initial_guess(self):
+        class GuessProxy:
+            def __init__(self, model):
+                self._model = model
+
+            def __getitem__(self, key):
+                return self._model.get_all_params()[key]
+
+            def __setitem__(self, key, value):
+                self._model.set_params(**{key: value})
+
+            def items(self):
+                return self._model.get_all_params().items()
+
+            def as_dict(self):
+                return self._model.get_all_params()
+
+            def __repr__(self):
+                return repr(self._model.get_all_params())
+
+        return GuessProxy(self.model)
+
         
     def _initialize_parameters(self):
         if not hasattr(self.model, '_params') or not self.model._params:
             self.model._params = initialize_parameters(self.model.param_names)
-        self.bounds = initialize_bounds(self.model.param_names)
         self._apply_user_constraints()
         self._update_model_impedance()
+
+        #self.bounds = initialize_bounds(self.model.param_names)
+
+    #@property
+    #def initial_guess(self):
+    #    return self.model.get_all_params()
 
     def _apply_user_constraints(self):
         for name, value in self.fixed_params.items():
             self.model.set_params(**{name: value})
-        for name, value in self.initial_guess.items():
+        for name, value in self.initial_guess.items():   #############################
             if not any(name.startswith(p.split('_')[0]) for p in self.fixed_params):
                 self.model.set_params(**{name: value})
     
@@ -56,7 +89,7 @@ class ImpedanceFitter:
         return self
 
     def set_initial_guess(self, **initial_guess):
-        for name, value in initial_guess.items():
+        for name, value in initial_guess.items():    ##########################################
             self.initial_guess[name] = value
             if not any(name.startswith(p.split('_')[0]) for p in self.fixed_params):
                 self.model.set_params(**{name: value})
@@ -67,9 +100,14 @@ class ImpedanceFitter:
         all_params = self.model.get_all_params()
         self.free_param_names = [k for k in all_params if not any(k.startswith(p.split('_')[0]) for p in self.fixed_params)]
 
-        x0 = [all_params[k] for k in self.free_param_names]
-        lb = [self.bounds.get(k, (-np.inf, np.inf))[0] for k in self.free_param_names]
-        ub = [self.bounds.get(k, (-np.inf, np.inf))[1] for k in self.free_param_names]
+        #x0 = [all_params[k] for k in self.free_param_names]
+        #lb = [self.bounds.get(k, (-np.inf, np.inf))[0] for k in self.free_param_names]
+        #ub = [self.bounds.get(k, (-np.inf, np.inf))[1] for k in self.free_param_names]
+
+        x0 = [self.initial_guess[k] for k in self.free_param_names]
+        lb = [self.bounds[k][0] for k in self.free_param_names]
+        ub = [self.bounds[k][1] for k in self.free_param_names]
+
 
         return np.array(x0), (lb, ub)
 

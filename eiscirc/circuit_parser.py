@@ -12,6 +12,7 @@ from matplotlib.lines import Line2D
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 class ImpedanceModel:
+    DEFAULT_FREQS = np.logspace(5, -2, 50)
     def __init__(self, circuit_structure):
         if isinstance(circuit_structure, str):
             self.circuit_string = circuit_structure
@@ -27,6 +28,17 @@ class ImpedanceModel:
         self.param_names = self._get_parameter_names()
         self._params = initialize_parameters(self.param_names)
         self._local_bounds = initialize_bounds(self.param_names)
+
+        self._default_omega = 2 * np.pi * self.DEFAULT_FREQS
+        self._last_omega = self._default_omega
+        self.impedance(self._default_omega) 
+  
+    
+    ####### if user wants to change default
+    def set_omega(self, frequencies: np.ndarray):
+        self._default_omega = 2 * np.pi * frequencies
+        self._last_omega = self._default_omega
+        return self.impedance(self._default_omega)
 
     def _get_parameter_names(self):
         pattern = r'\b([RLW]\w+|C(?!PE)\w+|CPE\w+|Ws\w+|Wo\w+|G\w+|H\w+)\b'
@@ -137,7 +149,6 @@ class ImpedanceModel:
                         raise ValueError("Bounds must be a (min, max) tuple")
                     model._local_bounds[full_key] = tuple(float(v) for v in value)
 
-
             return BoundProxy()
 
         def __repr__(self):
@@ -155,29 +166,6 @@ class ImpedanceModel:
             if not isinstance(value, (tuple, list)) or len(value) != 2:
                 raise ValueError("Bounds must be a (min, max) tuple")
             self._model._local_bounds[key] = tuple(float(v) for v in value)
-
-
-
-
-    @property
-    def bounds_OLD(self):
-        class BoundsDict(dict):
-            def __init__(inner_self, model):
-                inner_self._model = model
-
-            def __getitem__(inner_self, key):
-                bounds = inner_self._model.get_bounds(key)
-                if bounds is None:
-                    raise KeyError(f"No bounds defined for {key}")
-                return bounds
-
-            def __setitem__(inner_self, key, value):
-                if not isinstance(value, (tuple, list)) or len(value) != 2:
-                    raise ValueError("Bounds must be a (min, max) tuple")
-                inner_self._model._local_bounds[key] = tuple(float(x) for x in value)
-
-        return BoundsDict(self)
-    
 
 
     @property
@@ -235,6 +223,13 @@ class ImpedanceModel:
                     self._parent._params[name] = value
             else:
                 raise AttributeError(f"Unknown parameter '{name}'")
+            
+            if self._parent._last_omega is not None:
+                try:
+                    self._parent.impedance(self._parent._last_omega)
+                except Exception as e:
+                    print(f"Warning: impedance update failed after param change: {e}")
+
 
         def _create_param_proxy(self, param_name, param_dict):
             parent = self._parent
@@ -251,8 +246,16 @@ class ImpedanceModel:
                         full_name = f"{param_name}_{attr}"
                         parent._check_bounds(full_name, value)
                         param_dict[attr] = value
+
+                        # ✅ Trigger impedance update if omega is known
+                        if parent._last_omega is not None:
+                            try:
+                                parent.impedance(parent._last_omega)
+                            except Exception as e:
+                                print(f"Warning: impedance update failed after param change: {e}")
                     else:
                         raise AttributeError(f"No such sub-parameter '{attr}'")
+
 
                 def __iter__(self_inner):
                     return iter(self_inner.__tuple__())
@@ -323,6 +326,10 @@ class ImpedanceModel:
         return result
 
     def impedance(self, omega, *args, **kwargs):
+        if omega is None:
+                omega = self._last_omega or self._default_omega
+
+        self._last_omega = omega
         if args or kwargs:
             if len(args) == 1:
                 arg = args[0]
