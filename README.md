@@ -21,3 +21,15 @@ Designed for electrochemical systems, battery analysis, materials characterizati
 
 ```bash
 pip install numpy scipy matplotlib
+
+
+## Quick Start
+
+See [`examples/quick_start.py`](examples/quick_start.py)
+
+Or try in Python:
+
+```python
+from circuit_parser import ImpedanceModel
+model = ImpedanceModel("R0-CPE1")
+model.params.CPE1.alpha = 0.9
