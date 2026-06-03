@@ -27,6 +27,8 @@ jobs:
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then python -m pip install -r requirements.txt; fi
           python -m pip install pytest
+          # Install the package itself so tests can import `eiscirc`
+          python -m pip install -e .
 
       - name: Run tests
         run: |
