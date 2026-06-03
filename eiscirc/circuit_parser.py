@@ -364,24 +364,26 @@ class ImpedanceModel:
 
     def _create_compiled_impedance(self, structure):
         if isinstance(structure, str):
+            # Ensure each component function returns an array with the same shape as omega
             if structure.startswith("R"):
-                return lambda omega, **params: params[structure]
+                return lambda omega, **params: np.ones_like(np.asarray(omega), dtype=complex) * params[structure]
             elif structure.startswith("C") and not structure.startswith("CPE"):
-                return lambda omega, **params: 1 / (1j * omega * params[structure])
+                return lambda omega, **params: 1.0 / (1j * np.asarray(omega) * params[structure])
             elif structure.startswith("CPE"):
-                return lambda omega, **params: 1 / (1j * omega * params[structure][0])**params[structure][1]
+                # CPE: 1 / ( (j*omega*C)^alpha )
+                return lambda omega, **params: 1.0 / np.power((1j * np.asarray(omega) * params[structure][0]), params[structure][1])
             elif structure.startswith("L"):
-                return lambda omega, **params: 1j * omega * params[structure]
+                return lambda omega, **params: 1j * np.asarray(omega) * params[structure]
             elif structure.startswith("Ws"):
-                return lambda omega, **params: params[structure][0] * np.tanh(params[structure][1] * np.sqrt(1j * omega)) / np.sqrt(1j * omega)
+                return lambda omega, **params: params[structure][0] * np.tanh(params[structure][1] * np.sqrt(1j * np.asarray(omega))) / np.sqrt(1j * np.asarray(omega))
             elif structure.startswith("Wo"):
-                return lambda omega, **params: params[structure][0] * np.coth(params[structure][1] * np.sqrt(1j * omega)) / np.sqrt(1j * omega)
+                return lambda omega, **params: params[structure][0] * (1.0 / np.tanh(params[structure][1] * np.sqrt(1j * np.asarray(omega)))) / np.sqrt(1j * np.asarray(omega))
             elif structure.startswith("W") and not structure.startswith("Ws") and not structure.startswith("Wo"):
-                return lambda omega, **params: params[structure] / np.sqrt(1j * omega)
+                return lambda omega, **params: params[structure] / np.sqrt(1j * np.asarray(omega))
             elif structure.startswith("G"):
-                return lambda omega, **params: params[structure][0] / np.sqrt(1 + 1j * omega * params[structure][1])
+                return lambda omega, **params: params[structure][0] / np.sqrt(1 + 1j * np.asarray(omega) * params[structure][1])
             elif structure.startswith("H"):
-                return lambda omega, **params: params[structure][0] / (1 + (1j * omega * params[structure][1])**params[structure][2])
+                return lambda omega, **params: params[structure][0] / (1.0 + np.power((1j * np.asarray(omega) * params[structure][1]), params[structure][2]))
             else:
                 raise ValueError(f"Unknown component type: {structure}")
         elif isinstance(structure, tuple):
@@ -389,9 +391,9 @@ class ImpedanceModel:
             sub_functions = [self._create_compiled_impedance(sub) for sub in structure[1:]]
 
             if operator == "series":
-                return lambda omega, **params: sum(f(omega, **params) for f in sub_functions)
+                return lambda omega, **params: sum((f(omega, **params) for f in sub_functions))
             elif operator == "parallel":
-                return lambda omega, **params: 1 / sum(1 / f(omega, **params) for f in sub_functions)
+                return lambda omega, **params: 1.0 / sum((1.0 / f(omega, **params) for f in sub_functions))
         else:
             raise ValueError("Unknown structure format")
 
@@ -728,55 +730,91 @@ class ImpedanceModel:
         ax.text(x + width/2, y, label, ha='center', va='center', fontsize=fontsize)
 
 def parse_circuit(expression):
-    """Parse a circuit expression string into a structured tuple format."""
-    expression = expression.replace(" ", "")
-    
-    def parse(expr):
-        # Base case: single component
-        if re.match(r'^[A-Za-z]+\d+$', expr):
-            return expr
-        
-        # Handle parentheses
-        if expr.startswith('(') and expr.endswith(')'):
-            return parse(expr[1:-1])
-        
-        # Check for series connections (denoted by '-')
+    """Parse a circuit expression string into a structured tuple format.
+
+    This parser accepts series '-' and parallel '//' operators and
+    component tokens like 'R0', 'CPE1', 'L1'. It validates input and
+    raises ValueError for malformed expressions (unbalanced parentheses,
+    invalid operators like '=', single '/', or illegal characters).
+    """
+    expr = expression.replace(" ", "")
+
+    # Basic validation
+    if expr.count('(') != expr.count(')'):
+        raise ValueError(f"Unbalanced parentheses in circuit expression: {expression}")
+
+    # Disallow '=' operator and other unexpected characters
+    if '=' in expr:
+        raise ValueError("Invalid operator '=' in circuit expression. Use '-' for series and '//' for parallel.")
+
+    # Disallow single slash '/' that is not part of '//' (parallel)
+    if re.search(r'(?<!/)/(?!/)', expr):
+        raise ValueError("Single '/' is invalid; use '//' for parallel connections.")
+
+    # Only allow characters: letters, digits, parentheses, '-', '/'
+    if re.search(r'[^A-Za-z0-9()\-/]', expr):
+        raise ValueError(f"Invalid characters in circuit expression: {expression}")
+
+    # Prevent expressions that start or end with an operator
+    if expr.startswith('-') or expr.endswith('-') or expr.startswith('//') or expr.endswith('//'):
+        raise ValueError(f"Expression cannot start or end with an operator: {expression}")
+
+    def parse(s):
+        # Base case: single component token
+        if re.match(r'^[A-Za-z]+\d+$', s):
+            return s
+
+        # Strip surrounding parentheses
+        if s.startswith('(') and s.endswith(')'):
+            return parse(s[1:-1])
+
+        # Series split (top-level '-')
         series_parts = []
         depth = 0
         start = 0
-        for i, char in enumerate(expr):
-            if char == '(':
+        for i, ch in enumerate(s):
+            if ch == '(':
                 depth += 1
-            elif char == ')':
+            elif ch == ')':
                 depth -= 1
-            if char == '-' and depth == 0:
-                series_parts.append(expr[start:i])
+            if ch == '-' and depth == 0:
+                series_parts.append(s[start:i])
                 start = i + 1
         if start != 0:
-            series_parts.append(expr[start:])
+            series_parts.append(s[start:])
             if len(series_parts) > 1:
                 return ("series",) + tuple(parse(part) for part in series_parts)
-        
-        # Check for parallel connections (denoted by '//')
+
+        # Parallel split (top-level '//')
         parallel_parts = []
         depth = 0
         start = 0
-        for i, char in enumerate(expr):
-            if char == '(':
+        i = 0
+        while i < len(s):
+            ch = s[i]
+            if ch == '(':
                 depth += 1
-            elif char == ')':
+                i += 1
+                continue
+            if ch == ')':
                 depth -= 1
-            if expr[i:i+2] == '//' and depth == 0:
-                parallel_parts.append(expr[start:i])
+                i += 1
+                continue
+            if s[i:i+2] == '//' and depth == 0:
+                parallel_parts.append(s[start:i])
                 start = i + 2
+                i += 2
+                continue
+            i += 1
         if start != 0:
-            parallel_parts.append(expr[start:])
+            parallel_parts.append(s[start:])
             if len(parallel_parts) > 1:
                 return ("parallel",) + tuple(parse(part) for part in parallel_parts)
-        
-        return expr
-    
-    return parse(expression)
+
+        # If nothing matched, the token is invalid
+        raise ValueError(f"Unable to parse circuit token: '{s}' in expression '{expression}'")
+
+    return parse(expr)
 
 class ModelBoundsAccessor:
     """Helper class for dictionary-style bounds access"""
