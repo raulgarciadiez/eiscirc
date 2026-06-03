@@ -11,6 +11,36 @@ import matplotlib.patches as patches
 from matplotlib.lines import Line2D
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
+
+def _safe_tanh(z):
+    """Safe tanh for complex inputs: avoid overflow by clamping magnitude.
+
+    For very large |z| we approximate tanh(z) -> 1 to avoid overflow warnings
+    while preserving the complex dtype.
+    """
+    z = np.asarray(z)
+    mag = np.abs(z)
+    # compute tanh for 'safe' magnitudes
+    out = np.tanh(z)
+    # where magnitude is huge, approximate tanh(z) ~ 1.0 (complex)
+    out = np.where(mag > 50.0, 1.0 + 0j, out)
+    return out
+
+
+def _safe_coth(z):
+    """Safe coth for complex inputs: coth(z) = 1/tanh(z).
+
+    Use _safe_tanh and guard against division by zero.
+    """
+    t = _safe_tanh(z)
+    # avoid division by zero: where t==0, use large number approximation
+    with np.errstate(divide='ignore', invalid='ignore'):
+        c = 1.0 / t
+    # for extremely large magnitude, coth ~ 1
+    mag = np.abs(z)
+    c = np.where(mag > 50.0, 1.0 + 0j, c)
+    return c
+
 class ImpedanceModel:
     DEFAULT_FREQS = np.logspace(5, -2, 50)
     def __init__(self, circuit_structure):
@@ -41,7 +71,8 @@ class ImpedanceModel:
         return self.impedance(self._default_omega)
 
     def _get_parameter_names(self):
-        pattern = r'\b([RLW]\w+|C(?!PE)\w+|CPE\w+|Ws\w+|Wo\w+|G\w+|H\w+)\b'
+        # Include known base types such as R, L, W, C, CPE, Ws, Wo, G, H and TLM
+        pattern = r'\b([RLW]\w+|C(?!PE)\w+|CPE\w+|Ws\w+|Wo\w+|G\w+|H\w+|TLM\w+)\b'
         components = re.findall(pattern, self.circuit_string)
         seen = set()
         return [x for x in components if not (x in seen or seen.add(x))]
@@ -351,6 +382,9 @@ class ImpedanceModel:
                     calc_params[name] = (value['R'], value['tau'])
                 elif name.startswith('H'):
                     calc_params[name] = (value['R'], value['tau'], value['alpha'])
+                else:
+                    # Pass through structured parameter dicts for types like TLM
+                    calc_params[name] = value
             else:
                 calc_params[name] = value
 
@@ -375,15 +409,20 @@ class ImpedanceModel:
             elif structure.startswith("L"):
                 return lambda omega, **params: 1j * np.asarray(omega) * params[structure]
             elif structure.startswith("Ws"):
-                return lambda omega, **params: params[structure][0] * np.tanh(params[structure][1] * np.sqrt(1j * np.asarray(omega))) / np.sqrt(1j * np.asarray(omega))
+                return lambda omega, **params: params[structure][0] * _safe_tanh(params[structure][1] * np.sqrt(1j * np.asarray(omega))) / np.sqrt(1j * np.asarray(omega))
             elif structure.startswith("Wo"):
-                return lambda omega, **params: params[structure][0] * (1.0 / np.tanh(params[structure][1] * np.sqrt(1j * np.asarray(omega)))) / np.sqrt(1j * np.asarray(omega))
+                return lambda omega, **params: params[structure][0] * _safe_coth(params[structure][1] * np.sqrt(1j * np.asarray(omega))) / np.sqrt(1j * np.asarray(omega))
             elif structure.startswith("W") and not structure.startswith("Ws") and not structure.startswith("Wo"):
                 return lambda omega, **params: params[structure] / np.sqrt(1j * np.asarray(omega))
             elif structure.startswith("G"):
                 return lambda omega, **params: params[structure][0] / np.sqrt(1 + 1j * np.asarray(omega) * params[structure][1])
             elif structure.startswith("H"):
                 return lambda omega, **params: params[structure][0] / (1.0 + np.power((1j * np.asarray(omega) * params[structure][1]), params[structure][2]))
+            elif structure.startswith("TLM"):
+                # Basic placeholder for Transmission Line Model (TLM)
+                # Uses parameters: R (longitudinal resistance), C (transverse capacitance), length
+                # This is a simplified representation and should be replaced by a full TLM model if needed.
+                return lambda omega, **params: params[structure]['R'] + 1.0 / (1j * np.asarray(omega) * params[structure]['C'] * params[structure].get('length', 1.0))
             else:
                 raise ValueError(f"Unknown component type: {structure}")
         elif isinstance(structure, tuple):

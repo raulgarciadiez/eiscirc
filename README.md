@@ -124,3 +124,33 @@ pytest -q
 ```
 
 This matches the CI step which runs `python -m pip install -e .` before executing the tests.
+
+## Circuit grammar and supported elements
+
+The library accepts compact circuit expressions using the following rules:
+
+- Series connection: use `-` between elements (e.g. `R0-C1-L1`).
+- Parallel connection: use `//` between elements (e.g. `R0-(CPE1//R1)`).
+- Parentheses may be used to group sub-expressions (e.g. `R0-(R1-CPE1)//R2`).
+- Component tokens must be letters followed by an index number, for example `R0`, `C1`, `CPE1`, `Ws1`.
+
+Examples:
+
+- `R0-CPE1//R1`  — series of R0 and (CPE1 in parallel with R1).
+- `R0-(CPE1//R1)` — same as above but explicit grouping.
+
+Supported component base types are read from `eiscirc/impedance_parameters_default.py` and typically include:
+
+- `R`  — resistor
+- `C`  — capacitor
+- `L`  — inductor
+- `CPE` — constant phase element
+- `W`  — Warburg (semi-infinite)
+- `Ws`, `Wo` — finite/open Warburg variants
+- `G` — Gerischer
+- `H` — Havránek-style element
+- `TLM` — transmission-line model (if used)
+
+If you pass an invalid expression the parser will raise a ValueError with a helpful message (examples: unbalanced parentheses, single `/` instead of `//`, or usage of the `=` operator).
+
+For advanced usage, consult `eiscirc/impedance_parameters_default.py` to see available sub-parameters for structured elements (for example `CPE` contains `value` and `alpha`).
