@@ -101,3 +101,26 @@ plt.legend()
 plt.xlabel("Re(Z)")
 plt.ylabel("-Im(Z)")
 ```
+
+## Running tests
+
+To run the test suite locally (same steps used by CI), install the project and test dependencies and run pytest. Example (PowerShell):
+
+```powershell
+# (optional) create/activate a virtual environment
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+# upgrade pip and install runtime deps if you keep a requirements.txt
+python -m pip install --upgrade pip
+if (Test-Path requirements.txt) { python -m pip install -r requirements.txt }
+
+# install pytest and the package in editable mode so tests import the local package
+python -m pip install pytest
+python -m pip install -e .
+
+# run tests
+pytest -q
+```
+
+This matches the CI step which runs `python -m pip install -e .` before executing the tests.
