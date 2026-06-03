@@ -26,7 +26,7 @@ pip install numpy scipy matplotlib
 
 ### Quick Start
 
-See [`examples/quick_start.py`](examples/quick_start.ipynb)
+See [`examples/quick_start.ipynb`](examples/quick_start.ipynb)
 
 #### Define a model
 
