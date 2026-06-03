@@ -154,3 +154,93 @@ Supported component base types are read from `eiscirc/impedance_parameters_defau
 If you pass an invalid expression the parser will raise a ValueError with a helpful message (examples: unbalanced parentheses, single `/` instead of `//`, or usage of the `=` operator).
 
 For advanced usage, consult `eiscirc/impedance_parameters_default.py` to see available sub-parameters for structured elements (for example `CPE` contains `value` and `alpha`).
+
+### Examples: composed expressions and expected parse trees
+
+Here are some representative expressions and what the parser returns (the structured tuple format):
+
+- Simple series: `R0-C1-L1`
+
+	parse_circuit("R0-C1-L1") -> ("series", "R0", "C1", "L1")
+
+- Parallel inside series (common pattern): `R0-(CPE1//R1)`
+
+	parse_circuit("R0-(CPE1//R1)") -> ("series", "R0", ("parallel", "CPE1", "R1"))
+
+- Double-parallel (parallel of two parallels): `R0-(R1//C1)//(R2//C2)`
+
+	parse_circuit("R0-(R1//C1)//(R2//C2)") -> ("parallel", ("series", "R0", ("parallel", "R1", "C1")), ("parallel", "R2", "C2"))
+
+- Nested groups: `R0-((R1-C1)//(R2-(CPE1//L1)))`
+
+	parse_circuit("R0-((R1-C1)//(R2-(CPE1//L1)))") ->
+	("series",
+		 "R0",
+		 ("parallel",
+			 ("series", "R1", "C1"),
+			 ("series", "R2", ("parallel", "CPE1", "L1"))
+		 )
+	)
+
+Tip: use the interactive helper to see the parse tree in Python:
+
+```python
+from eiscirc.circuit_parser import parse_circuit
+
+examples = [
+		"R0-C1-L1",
+		"R0-(CPE1//R1)",
+		"R0-(R1//C1)//(R2//C2)",
+		"R0-((R1-C1)//(R2-(CPE1//L1)))",
+]
+
+for expr in examples:
+		print(expr, '->', parse_circuit(expr))
+```
+
+This will print the nested tuple that the model compiler expects.
+
+## How to be sure all tests pass
+
+Locally:
+
+1. Create and activate a virtual environment (PowerShell):
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+2. Install dependencies and the package (editable mode) so tests import the local package:
+
+```powershell
+python -m pip install --upgrade pip
+if (Test-Path requirements.txt) { python -m pip install -r requirements.txt }
+python -m pip install pytest
+python -m pip install -e .
+```
+
+3. Run the full test suite:
+
+```powershell
+pytest -q
+```
+
+To run only the new element tests:
+
+```powershell
+pytest tests/test_elements.py -q
+```
+
+On GitHub (CI):
+
+- The project has a GitHub Actions workflow that runs pytest on pushes and PRs. After pushing your branch or opening a PR, go to the repository's "Actions" tab or the PR page to see the workflow run and check the job logs.
+- If a test fails in CI but passes locally, check the job log for environment differences (Python version, missing system packages, or differences in installed package versions). The CI matrix runs Python 3.10 and 3.11.
+
+What to look for in test output:
+
+- `.` or `PASSED` lines indicate passing tests.
+- `F` or `FAILED` indicates failing tests; pytest shows traceback and assertion details.
+- `E` or `ERROR` indicates import/runtime errors during collection; check the stack trace for the failing import or expression.
+
+If you'd like, I can add a small GitHub status badge to the top of this README once the CI run for your branch is green.
