@@ -798,62 +798,72 @@ def parse_circuit(expression):
     if expr.startswith('-') or expr.endswith('-') or expr.startswith('//') or expr.endswith('//'):
         raise ValueError(f"Expression cannot start or end with an operator: {expression}")
 
-    def parse(s):
-        # Base case: single component token
-        if re.match(r'^[A-Za-z]+\d+$', s):
-            return s
+    # Tokenize into COMPONENT, '(', ')', '-', '//' tokens
+    tok_regex = re.compile(r"(//|\-|\(|\)|[A-Za-z]+\d+)")
+    tokens = tok_regex.findall(expr)
 
-        # Strip surrounding parentheses
-        if s.startswith('(') and s.endswith(')'):
-            return parse(s[1:-1])
+    # Verify tokenization consumed all characters
+    joined = ''.join(tokens)
+    if joined != expr:
+        # This should be unlikely due to earlier validation, but keep safe
+        raise ValueError(f"Unable to tokenize expression: '{expression}'")
 
-        # Series split (top-level '-')
-        series_parts = []
-        depth = 0
-        start = 0
-        for i, ch in enumerate(s):
-            if ch == '(':
-                depth += 1
-            elif ch == ')':
-                depth -= 1
-            if ch == '-' and depth == 0:
-                series_parts.append(s[start:i])
-                start = i + 1
-        if start != 0:
-            series_parts.append(s[start:])
-            if len(series_parts) > 1:
-                return ("series",) + tuple(parse(part) for part in series_parts)
+    # Recursive-descent parser
+    idx = 0
 
-        # Parallel split (top-level '//')
-        parallel_parts = []
-        depth = 0
-        start = 0
-        i = 0
-        while i < len(s):
-            ch = s[i]
-            if ch == '(':
-                depth += 1
-                i += 1
-                continue
-            if ch == ')':
-                depth -= 1
-                i += 1
-                continue
-            if s[i:i+2] == '//' and depth == 0:
-                parallel_parts.append(s[start:i])
-                start = i + 2
-                i += 2
-                continue
-            i += 1
-        if start != 0:
-            parallel_parts.append(s[start:])
-            if len(parallel_parts) > 1:
-                return ("parallel",) + tuple(parse(part) for part in parallel_parts)
+    def peek():
+        return tokens[idx] if idx < len(tokens) else None
 
-        # If nothing matched, the token is invalid
-        raise ValueError(f"Unable to parse circuit token: '{s}' in expression '{expression}'")
+    def consume(expected=None):
+        nonlocal idx
+        if idx >= len(tokens):
+            return None
+        tok = tokens[idx]
+        if expected is not None and tok != expected:
+            return None
+        idx += 1
+        return tok
 
-    return parse(expr)
+    def parse_primary():
+        tok = peek()
+        if tok is None:
+            raise ValueError(f"Unexpected end of expression: '{expression}'")
+        if tok == '(':
+            consume('(')
+            node = parse_series()
+            if consume(')') is None:
+                raise ValueError(f"Unbalanced parentheses in expression: '{expression}'")
+            return node
+        # COMPONENT
+        if re.match(r'^[A-Za-z]+\d+$', tok):
+            consume()
+            return tok
+        raise ValueError(f"Unexpected token '{tok}' in expression '{expression}'")
+
+    def parse_parallel():
+        # parallel := primary ('//' primary)*
+        parts = [parse_primary()]
+        while peek() == '//':
+            consume('//')
+            parts.append(parse_primary())
+        if len(parts) == 1:
+            return parts[0]
+        return ('parallel',) + tuple(parts)
+
+    def parse_series():
+        # series := parallel ('-' parallel)*
+        parts = [parse_parallel()]
+        while peek() == '-':
+            consume('-')
+            parts.append(parse_parallel())
+        if len(parts) == 1:
+            return parts[0]
+        return ('series',) + tuple(parts)
+
+    ast = parse_series()
+    if idx != len(tokens):
+        raise ValueError(f"Unexpected trailing tokens in expression '{expression}': {tokens[idx:]}" )
+    return ast
 
 class ModelBoundsAccessor:
     """Helper class for dictionary-style bounds access"""
