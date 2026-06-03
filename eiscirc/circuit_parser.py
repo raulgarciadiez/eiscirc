@@ -799,7 +799,8 @@ def parse_circuit(expression):
         raise ValueError(f"Expression cannot start or end with an operator: {expression}")
 
     # Tokenize into COMPONENT, '(', ')', '-', '//' tokens
-    tok_regex = re.compile(r"(//|\-|\(|\)|[A-Za-z]+\d+)")
+    # Accept component tokens that start with a letter and may include letters, digits or underscores
+    tok_regex = re.compile(r"(//|\-|\(|\)|[A-Za-z][A-Za-z0-9_]*)")
     tokens = tok_regex.findall(expr)
 
     # Verify tokenization consumed all characters
@@ -834,8 +835,8 @@ def parse_circuit(expression):
             if consume(')') is None:
                 raise ValueError(f"Unbalanced parentheses in expression: '{expression}'")
             return node
-        # COMPONENT
-        if re.match(r'^[A-Za-z]+\d+$', tok):
+        # COMPONENT - must start with a letter and can include letters/digits/underscore
+        if re.match(r'^[A-Za-z][A-Za-z0-9_]*$', tok):
             consume()
             return tok
         raise ValueError(f"Unexpected token '{tok}' in expression '{expression}'")
