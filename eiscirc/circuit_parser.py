@@ -775,7 +775,26 @@ def parse_circuit(expression):
     component tokens like 'R0', 'CPE1', 'L1'. It validates input and
     raises ValueError for malformed expressions (unbalanced parentheses,
     invalid operators like '=', single '/', or illegal characters).
+
+    Args:
+        expression (str): A string representing the circuit topology, using
+            '-' for series connections and '//' for parallel connections.
+            Component names (e.g., 'R1', 'CPE1') are expected.
+
+    Returns:
+        tuple: A nested tuple structure representing the circuit.
+            Series connections are represented as ('series', ...),
+            and parallel connections as ('parallel', ...).
+
+    Examples:
+        >>> parse_circuit("R1-C2")
+        ('series', 'R1', 'C2')
+        >>> parse_circuit("R1//C2")
+        ('parallel', 'R1', 'C2')
+        >>> parse_circuit("R1-(C2//L3)")
+        ('series', 'R1', ('parallel', 'C2', 'L3'))
     """
+
     expr = expression.replace(" ", "")
 
     # Basic validation
